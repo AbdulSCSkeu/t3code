@@ -10,6 +10,7 @@ import { SymbolView } from "./AppSymbol";
 import { VideoThumbnailImage } from "./VideoThumbnailImage";
 import { useMediaActions } from "../state/mediaActions";
 import { type MediaActionsSource } from "../lib/mediaActionsSource";
+import { videoPlaybackStarted, videoPlaybackStopped } from "../lib/videoAudioSession";
 import { MediaActionsMenu } from "./MediaActionsMenu";
 
 /** Loads only after Play or opening the viewer. Source replacement never starts playback itself. */
@@ -30,6 +31,14 @@ function LoadedMediaVideo(props: {
     player.bufferOptions = { preferredForwardBufferDuration: 5 };
   });
   const { status } = useEvent(player, "statusChange", { status: player.status });
+  const { isPlaying } = useEvent(player, "playingChange", { isPlaying: player.playing });
+  // The last inline player to pause, finish, or unmount releases the iOS
+  // audio session expo-video activated, so interrupted audio can resume.
+  useEffect(() => {
+    if (!isPlaying) return;
+    videoPlaybackStarted();
+    return () => videoPlaybackStopped();
+  }, [isPlaying]);
   const loadSource = useEffectEvent(async (signal: AbortSignal) => {
     const uri = props.resolvePlaybackUri ? await props.resolvePlaybackUri() : props.uri;
     if (signal.aborted) return;

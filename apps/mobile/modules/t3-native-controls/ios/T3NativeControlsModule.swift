@@ -1,3 +1,4 @@
+import AVFoundation
 import ExpoModulesCore
 import Security
 import UIKit
@@ -95,6 +96,20 @@ public final class T3NativeControlsModule: Module {
   @MainActor
   func dismissVideo(identifier: String) async {
     dismissVideoPresentation(identifier: identifier)
+  }
+
+  // Inline (expo-video) players activate the .playback/.moviePlayback
+  // session but never deactivate it. JS calls this when the last inline
+  // player stops so interrupted apps get their resume notification. Any
+  // other category/mode means another feature owns the session now.
+  @JS
+  @MainActor
+  func releaseVideoAudioSession() async {
+    // A fullscreen presentation owns the session until its own teardown.
+    guard videoPresentation == nil else { return }
+    let session = AVAudioSession.sharedInstance()
+    guard session.category == .playback, session.mode == .moviePlayback else { return }
+    try? session.setActive(false, options: [.notifyOthersOnDeactivation])
   }
 
   @JS
