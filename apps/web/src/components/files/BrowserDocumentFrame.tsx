@@ -1,5 +1,11 @@
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import {
+  type KeybindingCommand,
+  type ScopedThreadRef,
+  THREAD_JUMP_KEYBINDING_COMMANDS,
+} from "@t3tools/contracts";
+import {
+  htmlRenderShortcutsMessage,
   htmlRenderThemeFragment,
   htmlRenderThemeMessage,
   htmlRenderResult,
@@ -7,13 +13,16 @@ import {
   readHtmlRenderKeyDown,
   readHtmlRenderLinkRequest,
 } from "@t3tools/shared/htmlRender";
-import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
+import { isMacPlatform, matchesKeybindingShortcut } from "@t3tools/shared/keybindings";
+import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useOpenLink } from "~/browser/useOpenLink";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
+import { effectiveShortcutsForCommand } from "~/keybindings";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
+import { primaryServerKeybindingsAtom } from "~/state/server";
 
 /**
  * Chromium's viewer opens with its own toolbar, a thumbnail rail and a small
@@ -22,6 +31,30 @@ import { cn } from "~/lib/utils";
  * selection and find still work inside the frame.
  */
 const PDF_VIEWER_FRAGMENT = "#toolbar=0&view=FitH";
+
+/**
+ * Shortcuts that still work while a focused HTML render holds the keyboard.
+ * The page reports the keys, and a page script can report any key it likes,
+ * so only commands that change what the reader sees are here, never one that
+ * changes a thread.
+ */
+const HTML_RENDER_SHORTCUT_COMMANDS: ReadonlyArray<KeybindingCommand> = [
+  "commandPalette.toggle",
+  "filePicker.toggle",
+  "projectSearch.toggle",
+  "chat.find",
+  "sidebar.toggle",
+  "rightPanel.toggle",
+  "rightPanel.toggleMaximized",
+  "threadPanel.toggle",
+  "terminal.toggle",
+  "preview.toggle",
+  "navigation.back",
+  "navigation.forward",
+  "thread.previous",
+  "thread.next",
+  ...THREAD_JUMP_KEYBINDING_COMMANDS,
+];
 
 export const isPdfPreviewFile = (path: string): boolean =>
   /\.pdf$/i.test(path.split(/[?#]/, 1)[0] ?? "");
@@ -91,6 +124,33 @@ export function HtmlRenderDocument(props: {
     frameRef.current?.contentWindow?.postMessage(htmlRenderThemeMessage(theme), "*");
   };
   useEffect(postTheme, [theme]);
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const shortcuts = useMemo(
+    () =>
+      HTML_RENDER_SHORTCUT_COMMANDS.flatMap((command) =>
+        effectiveShortcutsForCommand(keybindings, command),
+      ),
+    [keybindings],
+  );
+  const postShortcuts = () => {
+    const mac = isMacPlatform(navigator.platform);
+    frameRef.current?.contentWindow?.postMessage(
+      htmlRenderShortcutsMessage(
+        shortcuts.map((shortcut) => ({
+          key: shortcut.key,
+          metaKey: shortcut.metaKey || (shortcut.modKey && mac),
+          ctrlKey: shortcut.ctrlKey || (shortcut.modKey && !mac),
+          shiftKey: shortcut.shiftKey,
+          altKey: shortcut.altKey,
+        })),
+      ),
+      "*",
+    );
+  };
+  useEffect(postShortcuts, [shortcuts]);
+  const isShortcut = useEffectEvent((key: NonNullable<ReturnType<typeof readHtmlRenderKeyDown>>) =>
+    shortcuts.some((shortcut) => matchesKeybindingShortcut(key, shortcut, navigator.platform)),
+  );
   const openChangeRequestLink = useOpenChangeRequestLink(props.threadRef);
   const openLink = useOpenLink(props.threadRef);
   // Same rules as a chat link: a pull request opens in the right panel, any
@@ -142,8 +202,9 @@ export function HtmlRenderDocument(props: {
     return () => window.removeEventListener("message", openLink);
   }, []);
   // A focused frame takes every key, so app shortcuts would stop until the
-  // reader clicked out. The page passes on Cmd/Ctrl chords, which replay on the
-  // frame element and bubble to the app's window listeners, gated like links.
+  // reader clicked out. The page passes on the chords posted to it, which replay
+  // on the frame element and bubble to the app's window listeners. A report is
+  // gated like a link and must be one of those chords.
   useEffect(() => {
     const replayKey = (event: MessageEvent) => {
       const frame = frameRef.current;
@@ -153,7 +214,8 @@ export function HtmlRenderDocument(props: {
         frame === null ||
         event.source !== frame.contentWindow ||
         document.activeElement !== frame ||
-        navigator.userActivation?.isActive === false
+        navigator.userActivation?.isActive === false ||
+        !isShortcut(key)
       ) {
         return;
       }
@@ -190,6 +252,7 @@ export function HtmlRenderDocument(props: {
         setLoaded(true);
         // Covers a theme change that landed while the page was loading.
         postTheme();
+        postShortcuts();
       }}
       // A frame whose color scheme differs from its document's paints an opaque
       // canvas, so the blank document a frame starts with would flash white in
