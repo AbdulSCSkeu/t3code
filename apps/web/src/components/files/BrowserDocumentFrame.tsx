@@ -130,17 +130,16 @@ export function HtmlRenderDocument(props: {
   const environmentKeybindings = useAtomValue(
     serverEnvironment.configValueAtom(props.threadRef?.environmentId ?? null),
   )?.keybindings;
-  const shortcuts = useMemo(() => {
+  // The app resolves a replayed key in its live context, so every allowed
+  // binding counts whatever its `when`, and a key that any binding gives to
+  // another command stays with the page. Only Cmd/Ctrl chords: a printable key
+  // would type into the composer instead.
+  const { shortcuts, blocked } = useMemo(() => {
     const mac = isMacPlatform(navigator.platform);
-    // The app resolves a replayed chord in its live context, so every allowed
-    // binding counts whatever its `when`, and a chord that any binding gives to
-    // another command stays with the page. Only Cmd/Ctrl chords: a printable
-    // key would type into the composer instead.
-    const claimed = new Set(
-      [...keybindings, ...(environmentKeybindings ?? [])]
-        .filter((binding) => !HTML_RENDER_SHORTCUT_COMMANDS.has(binding.command))
-        .map((binding) => shortcutConflictKey(binding.shortcut)),
-    );
+    const blocked = [...keybindings, ...(environmentKeybindings ?? [])]
+      .filter((binding) => !HTML_RENDER_SHORTCUT_COMMANDS.has(binding.command))
+      .map((binding) => binding.shortcut);
+    const claimed = new Set(blocked.map((shortcut) => shortcutConflictKey(shortcut)));
     const offered = new Map<string, HtmlRenderShortcut>();
     for (const { command, shortcut } of keybindings) {
       const conflictKey = shortcutConflictKey(shortcut);
@@ -151,8 +150,6 @@ export function HtmlRenderDocument(props: {
       ) {
         continue;
       }
-      // Re-inserted so the array keeps binding order, where a later binding wins.
-      offered.delete(conflictKey);
       offered.set(conflictKey, {
         key: shortcut.key,
         metaKey: shortcut.metaKey || (shortcut.modKey && mac),
@@ -161,20 +158,21 @@ export function HtmlRenderDocument(props: {
         altKey: shortcut.altKey,
       });
     }
-    return [...offered.values()];
+    return { shortcuts: [...offered.values()], blocked };
   }, [environmentKeybindings, keybindings]);
   const postShortcuts = () => {
     frameRef.current?.contentWindow?.postMessage(htmlRenderShortcutsMessage(shortcuts), "*");
   };
   useEffect(postShortcuts, [shortcuts]);
-  // The replay carries the matched shortcut's own key, never the page's key and
-  // code, so the app cannot read it as a different command.
-  const replayFor = useEffectEvent((key: NonNullable<ReturnType<typeof readHtmlRenderKeyDown>>) => {
-    const shortcut = shortcuts.findLast((candidate) =>
-      matchesKeybindingShortcut(key, { ...candidate, modKey: false }, navigator.platform),
-    );
-    return shortcut === undefined ? null : { ...shortcut, code: "", repeat: key.repeat };
-  });
+  // The page reports the key and code, and a page script can report any pair,
+  // so a key that could match another command's binding is never replayed.
+  const isShortcut = useEffectEvent(
+    (key: NonNullable<ReturnType<typeof readHtmlRenderKeyDown>>) =>
+      shortcuts.some((shortcut) =>
+        matchesKeybindingShortcut(key, { ...shortcut, modKey: false }, navigator.platform),
+      ) &&
+      !blocked.some((shortcut) => matchesKeybindingShortcut(key, shortcut, navigator.platform)),
+  );
   const openChangeRequestLink = useOpenChangeRequestLink(props.threadRef);
   const openLink = useOpenLink(props.threadRef);
   // Same rules as a chat link: a pull request opens in the right panel, any
@@ -242,10 +240,9 @@ export function HtmlRenderDocument(props: {
       ) {
         return;
       }
-      const replay = replayFor(key);
-      if (replay === null) return;
+      if (!isShortcut(key)) return;
       frame.dispatchEvent(
-        new KeyboardEvent("keydown", { ...replay, bubbles: true, cancelable: true }),
+        new KeyboardEvent("keydown", { ...key, bubbles: true, cancelable: true }),
       );
     };
     window.addEventListener("message", replayKey);
