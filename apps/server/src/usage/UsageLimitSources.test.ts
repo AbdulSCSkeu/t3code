@@ -1,9 +1,10 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
 import { ServerConfigStreamEvent, UsageLimitSourceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient } from "effect/http";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -77,6 +78,7 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
         HttpClient.HttpClient,
         HttpClient.make(() => Effect.die("Unexpected network request")),
       ),
+      NodeCrypto.layer,
     ]),
     Effect.scoped,
   ),
