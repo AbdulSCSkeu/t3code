@@ -4,6 +4,7 @@ import {
   htmlRenderThemeMessage,
   htmlRenderResult,
   readHtmlRenderContentHeight,
+  readHtmlRenderKeyDown,
   readHtmlRenderLinkRequest,
 } from "@t3tools/shared/htmlRender";
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
@@ -131,6 +132,29 @@ export function HtmlRenderDocument(props: {
     };
     window.addEventListener("message", openLink);
     return () => window.removeEventListener("message", openLink);
+  }, []);
+  // A focused frame takes every key, so app shortcuts would stop until the
+  // reader clicked out. The page passes on Cmd/Ctrl chords, which replay on the
+  // frame element and bubble to the app's window listeners, gated like links.
+  useEffect(() => {
+    const replayKey = (event: MessageEvent) => {
+      const frame = frameRef.current;
+      const key = readHtmlRenderKeyDown(event.data);
+      if (
+        key === undefined ||
+        frame === null ||
+        event.source !== frame.contentWindow ||
+        document.activeElement !== frame ||
+        navigator.userActivation?.isActive === false
+      ) {
+        return;
+      }
+      frame.dispatchEvent(
+        new KeyboardEvent("keydown", { ...key, bubbles: true, cancelable: true }),
+      );
+    };
+    window.addEventListener("message", replayKey);
+    return () => window.removeEventListener("message", replayKey);
   }, []);
   const { onContentHeight } = props;
   // A page posts its height once per change, so listen from the commit that

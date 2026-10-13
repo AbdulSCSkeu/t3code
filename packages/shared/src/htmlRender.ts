@@ -274,6 +274,9 @@ export const HTML_RENDER_LAYOUT_GUIDE = [
 const HOST_CONTEXT_CHANGED_METHOD = "ui/notifications/host-context-changed";
 const OPEN_LINK_METHOD = "ui/open-link";
 const SIZE_CHANGED_METHOD = "ui/notifications/size-changed";
+// Not part of MCP Apps: a focused frame keeps its keys from the app, so the
+// page passes on the Cmd/Ctrl chords app shortcuts are made of.
+const KEY_DOWN_METHOD = "t3/notifications/keydown";
 
 /** The content height in a framed render's `ui/notifications/size-changed` notification. */
 export function readHtmlRenderContentHeight(data: unknown): number | undefined {
@@ -309,6 +312,38 @@ export function readHtmlRenderLinkRequest(data: unknown):
   return typeof url === "string" && /^https?:\/\//i.test(url)
     ? { id, url, metaKey: metaKey === true, ctrlKey: ctrlKey === true }
     : undefined;
+}
+
+/** The key a framed render passed on in a `t3/notifications/keydown` notification. */
+export function readHtmlRenderKeyDown(data: unknown):
+  | {
+      readonly key: string;
+      readonly code: string;
+      readonly metaKey: boolean;
+      readonly ctrlKey: boolean;
+      readonly shiftKey: boolean;
+      readonly altKey: boolean;
+      readonly repeat: boolean;
+    }
+  | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const { jsonrpc, method, params } = data as Record<string, unknown>;
+  if (jsonrpc !== "2.0" || method !== KEY_DOWN_METHOD) return undefined;
+  if (typeof params !== "object" || params === null) return undefined;
+  const { key, code, metaKey, ctrlKey, shiftKey, altKey, repeat } = params as Record<
+    string,
+    unknown
+  >;
+  if (typeof key !== "string" || typeof code !== "string") return undefined;
+  return {
+    key,
+    code,
+    metaKey: metaKey === true,
+    ctrlKey: ctrlKey === true,
+    shiftKey: shiftKey === true,
+    altKey: altKey === true,
+    repeat: repeat === true,
+  };
 }
 
 /** The empty result a client sends back for a render's request. */
@@ -355,8 +390,9 @@ function rootRule(theme: HtmlRenderTheme): string {
 // a framed page asks its client to open it, and a top-level page (mobile)
 // opens it as a new window, which the client sends to the browser. A framed
 // page also reports its content height, measured as the server measures it,
-// so its client can fit the frame to the page.
-const BOOTSTRAP_SCRIPT = `(function(){var s=document.getElementById("t3-theme"),n=0;if(!s)return;var b=${JSON.stringify(BASE_CSS)};function a(t){if(!t||typeof t!=="object"||!t.variables||typeof t.variables!=="object")return;var c=":root{color-scheme:"+(t.appearance==="light"?"light":"dark")+";";for(var k in t.variables){if(/^--[a-z0-9-]+$/.test(k))c+=k+":"+String(t.variables[k]).replace(/[;{}<>]/g,"")+";";}s.textContent=c+"}"+b;}try{var m=/[#&]${THEME_FRAGMENT_KEY}=([^&]*)/.exec(location.hash);if(m){a(JSON.parse(decodeURIComponent(m[1])));history.replaceState(history.state,"",location.pathname+location.search);}}catch(e){}window.addEventListener("message",function(e){var d=e.data,p=d&&d.params;if(d&&d.jsonrpc==="2.0"&&d.method===${JSON.stringify(HOST_CONTEXT_CHANGED_METHOD)}&&p&&p.styles)a({appearance:p.theme,variables:p.styles.variables});});document.addEventListener("click",function(e){var l=e.isTrusted?e.composedPath().find(function(t){return t&&t.matches&&t.matches("a[href]");}):null,u;if(!l)return;try{u=new URL(l.getAttribute("href"),document.baseURI);}catch(x){return;}if(!/^https?:$/.test(u.protocol)||u.href.split("#")[0]===location.href.split("#")[0])return;if(window.parent!==window){e.preventDefault();window.parent.postMessage({jsonrpc:"2.0",id:"t3-link-"+(++n),method:${JSON.stringify(OPEN_LINK_METHOD)},params:{url:u.href,metaKey:e.metaKey,ctrlKey:e.ctrlKey}},"*");}else{l.setAttribute("target","_blank");l.setAttribute("rel","noopener");}},true);if(window.parent!==window){var h,o,z=function(){var r=document.documentElement,v=Math.ceil(r.scrollHeight>r.clientHeight?r.scrollHeight:r.getBoundingClientRect().height);if(v===h)return;h=v;window.parent.postMessage({jsonrpc:"2.0",method:${JSON.stringify(SIZE_CHANGED_METHOD)},params:{height:v}},"*");};if(window.ResizeObserver){o=new ResizeObserver(z);o.observe(document.documentElement);}document.addEventListener("DOMContentLoaded",function(){if(o&&document.body)o.observe(document.body);z();});window.addEventListener("load",z);}})();`;
+// so its client can fit the frame to the page, and passes on Cmd/Ctrl chords
+// the page left alone outside text fields, so app shortcuts keep working.
+const BOOTSTRAP_SCRIPT = `(function(){var s=document.getElementById("t3-theme"),n=0;if(!s)return;var b=${JSON.stringify(BASE_CSS)};function a(t){if(!t||typeof t!=="object"||!t.variables||typeof t.variables!=="object")return;var c=":root{color-scheme:"+(t.appearance==="light"?"light":"dark")+";";for(var k in t.variables){if(/^--[a-z0-9-]+$/.test(k))c+=k+":"+String(t.variables[k]).replace(/[;{}<>]/g,"")+";";}s.textContent=c+"}"+b;}try{var m=/[#&]${THEME_FRAGMENT_KEY}=([^&]*)/.exec(location.hash);if(m){a(JSON.parse(decodeURIComponent(m[1])));history.replaceState(history.state,"",location.pathname+location.search);}}catch(e){}window.addEventListener("message",function(e){var d=e.data,p=d&&d.params;if(d&&d.jsonrpc==="2.0"&&d.method===${JSON.stringify(HOST_CONTEXT_CHANGED_METHOD)}&&p&&p.styles)a({appearance:p.theme,variables:p.styles.variables});});document.addEventListener("click",function(e){var l=e.isTrusted?e.composedPath().find(function(t){return t&&t.matches&&t.matches("a[href]");}):null,u;if(!l)return;try{u=new URL(l.getAttribute("href"),document.baseURI);}catch(x){return;}if(!/^https?:$/.test(u.protocol)||u.href.split("#")[0]===location.href.split("#")[0])return;if(window.parent!==window){e.preventDefault();window.parent.postMessage({jsonrpc:"2.0",id:"t3-link-"+(++n),method:${JSON.stringify(OPEN_LINK_METHOD)},params:{url:u.href,metaKey:e.metaKey,ctrlKey:e.ctrlKey}},"*");}else{l.setAttribute("target","_blank");l.setAttribute("rel","noopener");}},true);if(window.parent!==window){var h,o,z=function(){var r=document.documentElement,v=Math.ceil(r.scrollHeight>r.clientHeight?r.scrollHeight:r.getBoundingClientRect().height);if(v===h)return;h=v;window.parent.postMessage({jsonrpc:"2.0",method:${JSON.stringify(SIZE_CHANGED_METHOD)},params:{height:v}},"*");};if(window.ResizeObserver){o=new ResizeObserver(z);o.observe(document.documentElement);}document.addEventListener("DOMContentLoaded",function(){if(o&&document.body)o.observe(document.body);z();});window.addEventListener("load",z);window.addEventListener("keydown",function(e){var t=e.target;if(!e.isTrusted||e.defaultPrevented||e.isComposing||!(e.metaKey||e.ctrlKey)||/^(?:Meta|Control|Alt|Shift|OS)$/.test(e.key)||t&&(t.isContentEditable||/^(?:INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))return;window.parent.postMessage({jsonrpc:"2.0",method:${JSON.stringify(KEY_DOWN_METHOD)},params:{key:e.key,code:e.code,metaKey:e.metaKey,ctrlKey:e.ctrlKey,shiftKey:e.shiftKey,altKey:e.altKey,repeat:e.repeat}},"*");});}})();`;
 
 function bootstrapMarkup(markup: string): string {
   const dark = htmlRenderTheme(T3_CODE_DARK_THEME_COLORS, "dark");
