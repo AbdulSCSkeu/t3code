@@ -18,11 +18,11 @@ import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState }
 
 import { useOpenLink } from "~/browser/useOpenLink";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
-import { effectiveShortcutsForCommand, resolveShortcutCommand } from "~/keybindings";
+import { effectiveShortcutsForCommand, shortcutConflictKey } from "~/keybindings";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
-import { primaryServerKeybindingsAtom } from "~/state/server";
+import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
 
 /**
  * Chromium's viewer opens with its own toolbar, a thumbnail rail and a small
@@ -125,18 +125,31 @@ export function HtmlRenderDocument(props: {
   };
   useEffect(postTheme, [theme]);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  // Chat also resolves project scripts from the thread's own environment.
+  const environmentKeybindings = useAtomValue(
+    serverEnvironment.configValueAtom(props.threadRef?.environmentId ?? null),
+  )?.keybindings;
   const shortcuts = useMemo(() => {
     const mac = isMacPlatform(navigator.platform);
-    return HTML_RENDER_SHORTCUT_COMMANDS.flatMap((command) =>
-      effectiveShortcutsForCommand(keybindings, command).map((shortcut) => ({
-        key: shortcut.key,
-        metaKey: shortcut.metaKey || (shortcut.modKey && mac),
-        ctrlKey: shortcut.ctrlKey || (shortcut.modKey && !mac),
-        shiftKey: shortcut.shiftKey,
-        altKey: shortcut.altKey,
-      })),
+    // The app resolves a replayed chord in its live context, so a chord that
+    // any binding, in any context, gives to another command stays with the page.
+    const claimed = new Set(
+      [...keybindings, ...(environmentKeybindings ?? [])]
+        .filter((binding) => !HTML_RENDER_SHORTCUT_COMMANDS.includes(binding.command))
+        .map((binding) => shortcutConflictKey(binding.shortcut)),
     );
-  }, [keybindings]);
+    return HTML_RENDER_SHORTCUT_COMMANDS.flatMap((command) =>
+      effectiveShortcutsForCommand(keybindings, command)
+        .filter((shortcut) => !claimed.has(shortcutConflictKey(shortcut)))
+        .map((shortcut) => ({
+          key: shortcut.key,
+          metaKey: shortcut.metaKey || (shortcut.modKey && mac),
+          ctrlKey: shortcut.ctrlKey || (shortcut.modKey && !mac),
+          shiftKey: shortcut.shiftKey,
+          altKey: shortcut.altKey,
+        })),
+    );
+  }, [environmentKeybindings, keybindings]);
   const postShortcuts = () => {
     frameRef.current?.contentWindow?.postMessage(htmlRenderShortcutsMessage(shortcuts), "*");
   };
@@ -147,10 +160,7 @@ export function HtmlRenderDocument(props: {
     const shortcut = shortcuts.find((candidate) =>
       matchesKeybindingShortcut(key, { ...candidate, modKey: false }, navigator.platform),
     );
-    if (shortcut === undefined) return null;
-    const replay = { ...shortcut, code: "", repeat: key.repeat };
-    const command = resolveShortcutCommand(replay, keybindings);
-    return command !== null && HTML_RENDER_SHORTCUT_COMMANDS.includes(command) ? replay : null;
+    return shortcut === undefined ? null : { ...shortcut, code: "", repeat: key.repeat };
   });
   const openChangeRequestLink = useOpenChangeRequestLink(props.threadRef);
   const openLink = useOpenLink(props.threadRef);
