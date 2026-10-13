@@ -175,7 +175,7 @@ export function HtmlRenderDocument(props: {
   // The page reports the key and code, and a page script can report any pair,
   // so a key that could match another command's binding is never replayed. A
   // named key (Backspace, Enter) must be the shortcut's own, since some app
-  // handlers read `event.key` directly.
+  // handlers read `event.key` directly. A dead key matches by its code.
   const isShortcut = useEffectEvent(
     (key: NonNullable<ReturnType<typeof readHtmlRenderKeyDown>>) => {
       const matches = (shortcut: HtmlRenderShortcut) =>
@@ -185,6 +185,7 @@ export function HtmlRenderDocument(props: {
         allowed.length > 0 &&
         !blocked.some(matches) &&
         (key.key.length === 1 ||
+          key.key === "Dead" ||
           allowed.some((shortcut) => shortcut.key === normalizeEventKey(key.key)))
       );
     },
