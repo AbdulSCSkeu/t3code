@@ -18,7 +18,7 @@ import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState }
 
 import { useOpenLink } from "~/browser/useOpenLink";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
-import { effectiveShortcutsForCommand } from "~/keybindings";
+import { effectiveShortcutsForCommand, resolveShortcutCommand } from "~/keybindings";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
@@ -125,32 +125,33 @@ export function HtmlRenderDocument(props: {
   };
   useEffect(postTheme, [theme]);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const shortcuts = useMemo(
-    () =>
-      HTML_RENDER_SHORTCUT_COMMANDS.flatMap((command) =>
-        effectiveShortcutsForCommand(keybindings, command),
-      ),
-    [keybindings],
-  );
-  const postShortcuts = () => {
+  const shortcuts = useMemo(() => {
     const mac = isMacPlatform(navigator.platform);
-    frameRef.current?.contentWindow?.postMessage(
-      htmlRenderShortcutsMessage(
-        shortcuts.map((shortcut) => ({
-          key: shortcut.key,
-          metaKey: shortcut.metaKey || (shortcut.modKey && mac),
-          ctrlKey: shortcut.ctrlKey || (shortcut.modKey && !mac),
-          shiftKey: shortcut.shiftKey,
-          altKey: shortcut.altKey,
-        })),
-      ),
-      "*",
+    return HTML_RENDER_SHORTCUT_COMMANDS.flatMap((command) =>
+      effectiveShortcutsForCommand(keybindings, command).map((shortcut) => ({
+        key: shortcut.key,
+        metaKey: shortcut.metaKey || (shortcut.modKey && mac),
+        ctrlKey: shortcut.ctrlKey || (shortcut.modKey && !mac),
+        shiftKey: shortcut.shiftKey,
+        altKey: shortcut.altKey,
+      })),
     );
+  }, [keybindings]);
+  const postShortcuts = () => {
+    frameRef.current?.contentWindow?.postMessage(htmlRenderShortcutsMessage(shortcuts), "*");
   };
   useEffect(postShortcuts, [shortcuts]);
-  const isShortcut = useEffectEvent((key: NonNullable<ReturnType<typeof readHtmlRenderKeyDown>>) =>
-    shortcuts.some((shortcut) => matchesKeybindingShortcut(key, shortcut, navigator.platform)),
-  );
+  // The replay carries the matched shortcut's own key, never the page's key and
+  // code, so the app cannot read it as a different command.
+  const replayFor = useEffectEvent((key: NonNullable<ReturnType<typeof readHtmlRenderKeyDown>>) => {
+    const shortcut = shortcuts.find((candidate) =>
+      matchesKeybindingShortcut(key, { ...candidate, modKey: false }, navigator.platform),
+    );
+    if (shortcut === undefined) return null;
+    const replay = { ...shortcut, code: "", repeat: key.repeat };
+    const command = resolveShortcutCommand(replay, keybindings);
+    return command !== null && HTML_RENDER_SHORTCUT_COMMANDS.includes(command) ? replay : null;
+  });
   const openChangeRequestLink = useOpenChangeRequestLink(props.threadRef);
   const openLink = useOpenLink(props.threadRef);
   // Same rules as a chat link: a pull request opens in the right panel, any
@@ -214,13 +215,14 @@ export function HtmlRenderDocument(props: {
         frame === null ||
         event.source !== frame.contentWindow ||
         document.activeElement !== frame ||
-        navigator.userActivation?.isActive === false ||
-        !isShortcut(key)
+        navigator.userActivation?.isActive === false
       ) {
         return;
       }
+      const replay = replayFor(key);
+      if (replay === null) return;
       frame.dispatchEvent(
-        new KeyboardEvent("keydown", { ...key, bubbles: true, cancelable: true }),
+        new KeyboardEvent("keydown", { ...replay, bubbles: true, cancelable: true }),
       );
     };
     window.addEventListener("message", replayKey);
