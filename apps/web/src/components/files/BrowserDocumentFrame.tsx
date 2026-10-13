@@ -16,7 +16,11 @@ import {
   readHtmlRenderKeyDown,
   readHtmlRenderLinkRequest,
 } from "@t3tools/shared/htmlRender";
-import { isMacPlatform, matchesKeybindingShortcut } from "@t3tools/shared/keybindings";
+import {
+  isMacPlatform,
+  matchesKeybindingShortcut,
+  normalizeEventKey,
+} from "@t3tools/shared/keybindings";
 import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useOpenLink } from "~/browser/useOpenLink";
@@ -169,12 +173,20 @@ export function HtmlRenderDocument(props: {
   };
   useEffect(postShortcuts, [blocked, shortcuts]);
   // The page reports the key and code, and a page script can report any pair,
-  // so a key that could match another command's binding is never replayed.
+  // so a key that could match another command's binding is never replayed. A
+  // named key (Backspace, Enter) must be the shortcut's own, since some app
+  // handlers read `event.key` directly.
   const isShortcut = useEffectEvent(
     (key: NonNullable<ReturnType<typeof readHtmlRenderKeyDown>>) => {
       const matches = (shortcut: HtmlRenderShortcut) =>
         matchesKeybindingShortcut(key, { ...shortcut, modKey: false }, navigator.platform);
-      return shortcuts.some(matches) && !blocked.some(matches);
+      const allowed = shortcuts.filter(matches);
+      return (
+        allowed.length > 0 &&
+        !blocked.some(matches) &&
+        (key.key.length === 1 ||
+          allowed.some((shortcut) => shortcut.key === normalizeEventKey(key.key)))
+      );
     },
   );
   const openChangeRequestLink = useOpenChangeRequestLink(props.threadRef);
