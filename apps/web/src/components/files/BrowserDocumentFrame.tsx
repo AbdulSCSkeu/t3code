@@ -151,6 +151,8 @@ export function HtmlRenderDocument(props: {
       ) {
         continue;
       }
+      // Re-inserted so the array keeps binding order, where a later binding wins.
+      offered.delete(conflictKey);
       offered.set(conflictKey, {
         key: shortcut.key,
         metaKey: shortcut.metaKey || (shortcut.modKey && mac),
@@ -168,7 +170,7 @@ export function HtmlRenderDocument(props: {
   // The replay carries the matched shortcut's own key, never the page's key and
   // code, so the app cannot read it as a different command.
   const replayFor = useEffectEvent((key: NonNullable<ReturnType<typeof readHtmlRenderKeyDown>>) => {
-    const shortcut = shortcuts.find((candidate) =>
+    const shortcut = shortcuts.findLast((candidate) =>
       matchesKeybindingShortcut(key, { ...candidate, modKey: false }, navigator.platform),
     );
     return shortcut === undefined ? null : { ...shortcut, code: "", repeat: key.repeat };
