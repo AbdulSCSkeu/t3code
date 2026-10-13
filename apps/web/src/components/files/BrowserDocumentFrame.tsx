@@ -5,6 +5,7 @@ import {
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import {
+  type HtmlRenderShortcut,
   htmlRenderShortcutsMessage,
   htmlRenderThemeFragment,
   htmlRenderThemeMessage,
@@ -18,7 +19,7 @@ import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState }
 
 import { useOpenLink } from "~/browser/useOpenLink";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
-import { effectiveShortcutsForCommand, shortcutConflictKey } from "~/keybindings";
+import { shortcutConflictKey } from "~/keybindings";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
@@ -38,7 +39,7 @@ const PDF_VIEWER_FRAGMENT = "#toolbar=0&view=FitH";
  * so only commands that change what the reader sees are here, never one that
  * changes a thread.
  */
-const HTML_RENDER_SHORTCUT_COMMANDS: ReadonlyArray<KeybindingCommand> = [
+const HTML_RENDER_SHORTCUT_COMMANDS: ReadonlySet<KeybindingCommand> = new Set([
   "commandPalette.toggle",
   "filePicker.toggle",
   "projectSearch.toggle",
@@ -54,7 +55,7 @@ const HTML_RENDER_SHORTCUT_COMMANDS: ReadonlyArray<KeybindingCommand> = [
   "thread.previous",
   "thread.next",
   ...THREAD_JUMP_KEYBINDING_COMMANDS,
-];
+]);
 
 export const isPdfPreviewFile = (path: string): boolean =>
   /\.pdf$/i.test(path.split(/[?#]/, 1)[0] ?? "");
@@ -131,24 +132,34 @@ export function HtmlRenderDocument(props: {
   )?.keybindings;
   const shortcuts = useMemo(() => {
     const mac = isMacPlatform(navigator.platform);
-    // The app resolves a replayed chord in its live context, so a chord that
-    // any binding, in any context, gives to another command stays with the page.
+    // The app resolves a replayed chord in its live context, so every allowed
+    // binding counts whatever its `when`, and a chord that any binding gives to
+    // another command stays with the page. Only Cmd/Ctrl chords: a printable
+    // key would type into the composer instead.
     const claimed = new Set(
       [...keybindings, ...(environmentKeybindings ?? [])]
-        .filter((binding) => !HTML_RENDER_SHORTCUT_COMMANDS.includes(binding.command))
+        .filter((binding) => !HTML_RENDER_SHORTCUT_COMMANDS.has(binding.command))
         .map((binding) => shortcutConflictKey(binding.shortcut)),
     );
-    return HTML_RENDER_SHORTCUT_COMMANDS.flatMap((command) =>
-      effectiveShortcutsForCommand(keybindings, command)
-        .filter((shortcut) => !claimed.has(shortcutConflictKey(shortcut)))
-        .map((shortcut) => ({
-          key: shortcut.key,
-          metaKey: shortcut.metaKey || (shortcut.modKey && mac),
-          ctrlKey: shortcut.ctrlKey || (shortcut.modKey && !mac),
-          shiftKey: shortcut.shiftKey,
-          altKey: shortcut.altKey,
-        })),
-    );
+    const offered = new Map<string, HtmlRenderShortcut>();
+    for (const { command, shortcut } of keybindings) {
+      const conflictKey = shortcutConflictKey(shortcut);
+      if (
+        !HTML_RENDER_SHORTCUT_COMMANDS.has(command) ||
+        !(shortcut.metaKey || shortcut.ctrlKey || shortcut.modKey) ||
+        claimed.has(conflictKey)
+      ) {
+        continue;
+      }
+      offered.set(conflictKey, {
+        key: shortcut.key,
+        metaKey: shortcut.metaKey || (shortcut.modKey && mac),
+        ctrlKey: shortcut.ctrlKey || (shortcut.modKey && !mac),
+        shiftKey: shortcut.shiftKey,
+        altKey: shortcut.altKey,
+      });
+    }
+    return [...offered.values()];
   }, [environmentKeybindings, keybindings]);
   const postShortcuts = () => {
     frameRef.current?.contentWindow?.postMessage(htmlRenderShortcutsMessage(shortcuts), "*");
