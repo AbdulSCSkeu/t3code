@@ -1,6 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   type KeybindingCommand,
+  type KeybindingShortcut,
+  MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
   type ScopedThreadRef,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
@@ -55,6 +57,8 @@ const HTML_RENDER_SHORTCUT_COMMANDS: ReadonlySet<KeybindingCommand> = new Set([
   "thread.previous",
   "thread.next",
   ...THREAD_JUMP_KEYBINDING_COMMANDS,
+  // Share Cmd/Ctrl+digit with thread jumps, and act only while the picker is open.
+  ...MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
 ]);
 
 export const isPdfPreviewFile = (path: string): boolean =>
@@ -136,42 +140,42 @@ export function HtmlRenderDocument(props: {
   // would type into the composer instead.
   const { shortcuts, blocked } = useMemo(() => {
     const mac = isMacPlatform(navigator.platform);
+    const resolve = (shortcut: KeybindingShortcut): HtmlRenderShortcut => ({
+      key: shortcut.key,
+      metaKey: shortcut.metaKey || (shortcut.modKey && mac),
+      ctrlKey: shortcut.ctrlKey || (shortcut.modKey && !mac),
+      shiftKey: shortcut.shiftKey,
+      altKey: shortcut.altKey,
+    });
     const blocked = [...keybindings, ...(environmentKeybindings ?? [])]
       .filter((binding) => !HTML_RENDER_SHORTCUT_COMMANDS.has(binding.command))
-      .map((binding) => binding.shortcut);
-    const claimed = new Set(blocked.map((shortcut) => shortcutConflictKey(shortcut)));
-    const offered = new Map<string, HtmlRenderShortcut>();
+      .map((binding) => resolve(binding.shortcut));
+    const shortcuts = new Map<string, HtmlRenderShortcut>();
     for (const { command, shortcut } of keybindings) {
-      const conflictKey = shortcutConflictKey(shortcut);
       if (
-        !HTML_RENDER_SHORTCUT_COMMANDS.has(command) ||
-        !(shortcut.metaKey || shortcut.ctrlKey || shortcut.modKey) ||
-        claimed.has(conflictKey)
+        HTML_RENDER_SHORTCUT_COMMANDS.has(command) &&
+        (shortcut.metaKey || shortcut.ctrlKey || shortcut.modKey)
       ) {
-        continue;
+        shortcuts.set(shortcutConflictKey(shortcut), resolve(shortcut));
       }
-      offered.set(conflictKey, {
-        key: shortcut.key,
-        metaKey: shortcut.metaKey || (shortcut.modKey && mac),
-        ctrlKey: shortcut.ctrlKey || (shortcut.modKey && !mac),
-        shiftKey: shortcut.shiftKey,
-        altKey: shortcut.altKey,
-      });
     }
-    return { shortcuts: [...offered.values()], blocked };
+    return { shortcuts: [...shortcuts.values()], blocked };
   }, [environmentKeybindings, keybindings]);
   const postShortcuts = () => {
-    frameRef.current?.contentWindow?.postMessage(htmlRenderShortcutsMessage(shortcuts), "*");
+    frameRef.current?.contentWindow?.postMessage(
+      htmlRenderShortcutsMessage(shortcuts, blocked),
+      "*",
+    );
   };
-  useEffect(postShortcuts, [shortcuts]);
+  useEffect(postShortcuts, [blocked, shortcuts]);
   // The page reports the key and code, and a page script can report any pair,
   // so a key that could match another command's binding is never replayed.
   const isShortcut = useEffectEvent(
-    (key: NonNullable<ReturnType<typeof readHtmlRenderKeyDown>>) =>
-      shortcuts.some((shortcut) =>
-        matchesKeybindingShortcut(key, { ...shortcut, modKey: false }, navigator.platform),
-      ) &&
-      !blocked.some((shortcut) => matchesKeybindingShortcut(key, shortcut, navigator.platform)),
+    (key: NonNullable<ReturnType<typeof readHtmlRenderKeyDown>>) => {
+      const matches = (shortcut: HtmlRenderShortcut) =>
+        matchesKeybindingShortcut(key, { ...shortcut, modKey: false }, navigator.platform);
+      return shortcuts.some(matches) && !blocked.some(matches);
+    },
   );
   const openChangeRequestLink = useOpenChangeRequestLink(props.threadRef);
   const openLink = useOpenLink(props.threadRef);
