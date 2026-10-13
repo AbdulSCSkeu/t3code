@@ -12,6 +12,7 @@ import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "re
 import { useOpenLink } from "~/browser/useOpenLink";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
+import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 
 /**
@@ -96,6 +97,13 @@ export function HtmlRenderDocument(props: {
   // other link follows "Open links in", and Cmd/Ctrl-click goes to the system
   // browser. Without a thread there is no panel, so it goes to the browser.
   const open = useEffectEvent((url: string, modifiers: { metaKey: boolean; ctrlKey: boolean }) => {
+    // The modifier's destination needs no saved setting, so it never waits on one.
+    if (modifiers.metaKey || modifiers.ctrlKey) {
+      void readLocalApi()
+        ?.shell.openExternal(url)
+        .catch((cause: unknown) => console.error(cause));
+      return;
+    }
     if (
       props.threadRef !== undefined &&
       openChangeRequestLink(
