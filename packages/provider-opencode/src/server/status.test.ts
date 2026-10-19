@@ -469,35 +469,31 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
     }),
   );
 
-  it.effect.each(["empty", "absent"] as const)(
-    "omits Reasoning when model variants are %s",
-    (kind) =>
-      Effect.gen(function* () {
-        runtimeMock.state.inventory = {
-          providerList: {
-            connected: ["opencode"],
-            all: [
-              {
-                id: "opencode",
-                name: "OpenCode Zen",
-                models: {
-                  "big-pickle": {
-                    id: "big-pickle",
-                    name: "Big Pickle",
-                    ...(kind === "empty" ? { variants: {} } : {}),
-                  },
-                },
+  it.effect("keeps Agent without inventing Reasoning for models with no variants", () =>
+    Effect.gen(function* () {
+      runtimeMock.state.inventory = {
+        providerList: {
+          connected: ["opencode"],
+          all: [
+            {
+              id: "opencode",
+              name: "OpenCode Zen",
+              models: {
+                "big-pickle": { id: "big-pickle", name: "Big Pickle", variants: {} },
+                "glm-5": { id: "glm-5", name: "GLM-5" },
               },
-            ],
-            default: {},
-          },
-          agents: [
-            { name: "build", hidden: false, mode: "primary" },
-            { name: "plan", hidden: false, mode: "primary" },
+            },
           ],
-        };
-        const snapshot = yield* checkProvider(makeOpenCodeSettings());
-        const model = snapshot.models.find((entry) => entry.slug === "opencode/big-pickle");
+          default: {},
+        },
+        agents: [
+          { name: "build", hidden: false, mode: "primary" },
+          { name: "plan", hidden: false, mode: "primary" },
+        ],
+      };
+      const snapshot = yield* checkProvider(makeOpenCodeSettings());
+      for (const slug of ["opencode/big-pickle", "opencode/glm-5"]) {
+        const model = snapshot.models.find((entry) => entry.slug === slug);
         NodeAssert.ok(model);
         const descriptors = model.capabilities?.optionDescriptors;
         NodeAssert.deepEqual(descriptors, [
@@ -515,7 +511,8 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
         NodeAssert.deepEqual(buildProviderOptionSelectionsFromDescriptors(descriptors), [
           { id: "agent", value: "build" },
         ]);
-      }),
+      }
+    }),
   );
 
   it.effect("includes OpenCode skills in the provider snapshot", () =>

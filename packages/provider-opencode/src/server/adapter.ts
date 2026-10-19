@@ -2911,31 +2911,17 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           },
           abortController: AbortController,
         ) {
-          // Threads and drafts can retain variants after the catalog stops offering them.
-          // Filter only a confirmed mismatch; unavailable inventories and custom models
-          // keep their explicit selection rather than silently changing reasoning.
           const { variant, ...payloadWithoutVariant } = inputPayload;
-          const selectedModel = inputPayload.model;
-          const variantSupported =
-            variant && selectedModel
-              ? yield* sdkCall("provider.list", undefined, (signal) =>
-                  client.provider.list(undefined, {
-                    signal: AbortSignal.any([signal, abortController.signal]),
-                  }),
-                ).pipe(
-                  Effect.map((response) => {
-                    const model = response.data?.all.find(
-                      (provider) => provider.id === selectedModel.providerID,
-                    )?.models[selectedModel.modelID];
-                    return model === undefined
-                      ? undefined
-                      : Object.hasOwn(model.variants ?? {}, variant);
-                  }),
-                  Effect.timeout("4 seconds"),
-                  Effect.orElseSucceed(() => undefined),
-                )
-              : undefined;
-          const payload = variantSupported === false ? payloadWithoutVariant : inputPayload;
+          const selectedVariant = yield* OpenCodeRuntime.resolveOpenCodeVariant(
+            client,
+            inputPayload.model,
+            variant,
+            abortController.signal,
+          );
+          const payload = {
+            ...payloadWithoutVariant,
+            ...(selectedVariant === undefined ? {} : { variant: selectedVariant }),
+          };
           const text = payload.parts
             ?.filter((part) => part.type === "text")
             .map((part) => part.text)

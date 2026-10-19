@@ -232,6 +232,32 @@ export interface ParsedOpenCodeModelSlug {
   readonly modelID: string;
 }
 
+export const resolveOpenCodeVariant = Effect.fnUntraced(function* (
+  client: OpencodeClient,
+  model: ParsedOpenCodeModelSlug | undefined,
+  variant: string | undefined,
+  abortSignal?: AbortSignal,
+) {
+  if (!variant || !model) return variant;
+
+  // Only a confirmed catalog mismatch can invalidate a persisted selection.
+  return yield* runOpenCodeSdk("provider.list", (signal) =>
+    client.provider.list(undefined, {
+      signal: abortSignal ? AbortSignal.any([signal, abortSignal]) : signal,
+    }),
+  ).pipe(
+    Effect.map((response) => {
+      const catalogModel = response.data?.all.find((provider) => provider.id === model.providerID)
+        ?.models[model.modelID];
+      return catalogModel && !Object.hasOwn(catalogModel.variants ?? {}, variant)
+        ? undefined
+        : variant;
+    }),
+    Effect.timeout("4 seconds"),
+    Effect.orElseSucceed(() => variant),
+  );
+});
+
 export interface OpenCodeSkill {
   readonly name?: string | null;
   readonly description?: string | null;

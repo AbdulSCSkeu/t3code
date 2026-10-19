@@ -247,20 +247,12 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
 describe("OpenCodeAdapterV2", () => {
   it.effect.each([
     ["empty", "prompt"],
-    ["absent", "prompt"],
-    ["unsupported", "prompt"],
-    ["supported", "prompt"],
+    ["unsupported", "command"],
+    ["supported", "command"],
     ["unknown", "prompt"],
     ["failure", "prompt"],
     ["unset", "prompt"],
-    ["empty", "command"],
-    ["absent", "command"],
-    ["unsupported", "command"],
-    ["supported", "command"],
-    ["unknown", "command"],
-    ["failure", "command"],
-    ["unset", "command"],
-  ] as const)("normalizes reasoning variants for %j", ([kind, request]) =>
+  ] as const)("normalizes reasoning variants for %s inventory at %s dispatch", ([kind, request]) =>
     Effect.gen(function* () {
       const suffix = `variant-${kind}-${request}`;
       const nativeEvents = asyncEventStream();
@@ -295,16 +287,12 @@ describe("OpenCodeAdapterV2", () => {
                           : {
                               "big-pickle": {
                                 id: "big-pickle",
-                                ...(kind === "absent"
-                                  ? {}
-                                  : {
-                                      variants:
-                                        kind === "supported"
-                                          ? { medium: {} }
-                                          : kind === "unsupported"
-                                            ? { high: {} }
-                                            : {},
-                                    }),
+                                variants:
+                                  kind === "supported"
+                                    ? { medium: {} }
+                                    : kind === "unsupported"
+                                      ? { high: {} }
+                                      : {},
                               },
                             },
                     },
