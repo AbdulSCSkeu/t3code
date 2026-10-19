@@ -332,7 +332,7 @@ describe("OpenCodeAdapterV2", () => {
     ),
   );
 
-  it.effect("reuses successful model variants until expiry and retries failed inventories", () =>
+  it.effect("reuses successful model variants for the session and retries failed inventories", () =>
     Effect.gen(function* () {
       const sessionId = "variant-cache";
       const nativeEvents = asyncEventStream();
@@ -402,14 +402,104 @@ describe("OpenCodeAdapterV2", () => {
       assert.isFalse(Object.hasOwn(yield* submit(), "variant"));
       assert.equal(inventoryCalls, 2);
       variants = { medium: {} };
-      yield* TestClock.adjust("59 seconds");
+      yield* TestClock.adjust("61 seconds");
       assert.isFalse(Object.hasOwn(yield* submit(), "variant"));
       assert.equal(inventoryCalls, 2);
-      yield* TestClock.adjust("1 second");
-      assert.equal((yield* submit()).variant, "medium");
-      assert.equal(inventoryCalls, 3);
-      assert.equal((yield* submit()).variant, "medium");
-      assert.equal(inventoryCalls, 3);
+      yield* TestClock.adjust("2 minutes");
+      assert.isFalse(Object.hasOwn(yield* submit(), "variant"));
+      assert.equal(inventoryCalls, 2);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect("keeps queued steers behind a cold catalog lookup and cancels them on stop", () =>
+    Effect.gen(function* () {
+      const sessionId = "catalog-admission";
+      const nativeEvents = asyncEventStream();
+      const catalogStarted = promiseGate<void>();
+      const calls: string[] = [];
+      const harness = yield* makeOpenCodeRuntimeHarness(
+        sessionId,
+        sessionId,
+        {
+          event: {
+            subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
+              options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
+              return { stream: nativeEvents.stream };
+            },
+          },
+          provider: {
+            list: async (_input: unknown, { signal }: { signal: AbortSignal }) => {
+              calls.push("catalog");
+              catalogStarted.resolve();
+              await new Promise<void>((_resolve, reject) => {
+                signal.addEventListener(
+                  "abort",
+                  () => {
+                    calls.push("catalog-aborted");
+                    reject(signal.reason);
+                  },
+                  { once: true },
+                );
+              });
+              return { data: { all: [] } };
+            },
+          },
+          session: {
+            create: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
+            get: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
+            messages: async () => ({ data: [] }),
+            children: async () => ({ data: [] }),
+            promptAsync: async (_input: unknown, { signal }: { signal: AbortSignal }) => {
+              signal.throwIfAborted();
+              calls.push("prompt");
+              return { data: true };
+            },
+            abort: async () => {
+              calls.push("abort");
+              return { data: true };
+            },
+          },
+        },
+        { model: "opencode/big-pickle", options: [{ id: "variant", value: "medium" }] },
+      );
+      const start = yield* harness.startTurn().pipe(Effect.forkScoped);
+      yield* Effect.promise(() => catalogStarted.promise);
+      const snapshot = yield* harness.runtime.readThreadSnapshot({
+        providerThread: harness.providerThread,
+      });
+      const activeTurn = snapshot.providerTurns.at(-1)!;
+      const steer = (message: string) =>
+        harness.runtime
+          .steerTurn({
+            threadId: harness.threadId,
+            runId: harness.runId,
+            providerThread: harness.providerThread,
+            providerTurnId: activeTurn.id,
+            message: {
+              messageId: MessageId.make(message),
+              text: message,
+              attachments: [],
+              createdBy: "user",
+              creationSource: "web",
+            },
+          })
+          .pipe(Effect.exit, Effect.forkScoped({ startImmediately: true }));
+      const firstSteer = yield* steer("first follow-up");
+      const secondSteer = yield* steer("second follow-up");
+      yield* TestClock.adjust("5 seconds");
+      assert.deepEqual(calls, ["catalog"]);
+
+      yield* harness.runtime.interruptTurn({
+        providerThread: harness.providerThread,
+        providerTurnId: activeTurn.id,
+      });
+      yield* Fiber.join(start);
+      assert.isTrue(Exit.isFailure(yield* Fiber.join(firstSteer)));
+      assert.isTrue(Exit.isFailure(yield* Fiber.join(secondSteer)));
+      assert.deepEqual(calls, ["catalog", "catalog-aborted", "abort"]);
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,

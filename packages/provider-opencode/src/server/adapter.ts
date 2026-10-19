@@ -3338,8 +3338,20 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 ...(text.length === 0 ? [] : [{ type: "text" as const, text }]),
                 ...files,
               ];
+              const admissionMessageId = yield* makeOpenCodeMessageId(messageIdClock);
+              while (turn.admissionAbortController !== null) {
+                const pendingAdmission = turn.admissionSettled;
+                yield* Deferred.await(pendingAdmission);
+                // Another waiting steer may have claimed admission first.
+                if (turn.admissionSettled === pendingAdmission) break;
+              }
+              if (state.activeTurn !== turn || turn.finalized || turn.interrupted) {
+                return yield* protocolError(
+                  `OpenCode turn ${steerInput.providerTurnId} is not active`,
+                );
+              }
               turn.admissionGeneration = state.nextAdmissionGeneration++;
-              turn.admissionMessageId = yield* makeOpenCodeMessageId(messageIdClock);
+              turn.admissionMessageId = admissionMessageId;
               turn.admissionPending = true;
               turn.admissionAccepted = false;
               turn.admissionMessageObserved = false;
@@ -3372,7 +3384,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   ]).pipe(Effect.asVoid),
                 ),
               );
-              if (state.activeTurn === turn && !turn.finalized) {
+              if (state.activeTurn === turn && !turn.finalized && !turn.interrupted) {
                 const admissionAction = advanceOpenCodePromptAdmission(turn, "accepted");
                 if (admissionAction === "reconcile-idle") {
                   yield* reconcilePromptAdmission(state, turn);

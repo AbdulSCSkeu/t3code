@@ -14,7 +14,6 @@ import {
   type QuestionRequest,
 } from "@opencode-ai/sdk/v2";
 import * as Cause from "effect/Cause";
-import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
@@ -233,10 +232,7 @@ export interface ParsedOpenCodeModelSlug {
   readonly modelID: string;
 }
 
-export type OpenCodeVariantCache = Map<
-  string,
-  { readonly variants: ReadonlySet<string> | undefined; readonly expiresAt: number }
->;
+export type OpenCodeVariantCache = Map<string, ReadonlySet<string> | undefined>;
 
 export const resolveOpenCodeVariant = Effect.fnUntraced(function* (
   client: OpencodeClient,
@@ -249,11 +245,8 @@ export const resolveOpenCodeVariant = Effect.fnUntraced(function* (
 
   const key = `${model.providerID}/${model.modelID}`;
   const cached = cache?.get(key);
-  if (cached !== undefined) {
-    if (cached.expiresAt > (yield* Clock.currentTimeMillis)) {
-      return cached.variants !== undefined && !cached.variants.has(variant) ? undefined : variant;
-    }
-    cache?.delete(key);
+  if (cache?.has(key)) {
+    return cached !== undefined && !cached.has(variant) ? undefined : variant;
   }
 
   // Only a confirmed catalog mismatch can invalidate a persisted selection.
@@ -262,7 +255,7 @@ export const resolveOpenCodeVariant = Effect.fnUntraced(function* (
       signal: abortSignal ? AbortSignal.any([signal, abortSignal]) : signal,
     }),
   ).pipe(
-    Effect.timeout("4 seconds"),
+    Effect.timeout("10 seconds"),
     Effect.orElseSucceed(() => undefined),
   );
   if (response?.data === undefined) return variant;
@@ -272,7 +265,7 @@ export const resolveOpenCodeVariant = Effect.fnUntraced(function* (
   const variants = catalogModel ? new Set(Object.keys(catalogModel.variants ?? {})) : undefined;
   if (cache !== undefined) {
     // Keep only this model's names; provider.list can return several megabytes.
-    cache.set(key, { variants, expiresAt: (yield* Clock.currentTimeMillis) + 60_000 });
+    cache.set(key, variants);
   }
   return variants !== undefined && !variants.has(variant) ? undefined : variant;
 });
