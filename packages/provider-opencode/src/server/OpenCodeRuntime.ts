@@ -14,6 +14,7 @@ import {
   type QuestionRequest,
 } from "@opencode-ai/sdk/v2";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
@@ -232,30 +233,48 @@ export interface ParsedOpenCodeModelSlug {
   readonly modelID: string;
 }
 
+export type OpenCodeVariantCache = Map<
+  string,
+  { readonly variants: ReadonlySet<string> | undefined; readonly expiresAt: number }
+>;
+
 export const resolveOpenCodeVariant = Effect.fnUntraced(function* (
   client: OpencodeClient,
   model: ParsedOpenCodeModelSlug | undefined,
   variant: string | undefined,
   abortSignal?: AbortSignal,
+  cache?: OpenCodeVariantCache,
 ) {
   if (!variant || !model) return variant;
 
+  const key = `${model.providerID}/${model.modelID}`;
+  const cached = cache?.get(key);
+  if (cached !== undefined) {
+    if (cached.expiresAt > (yield* Clock.currentTimeMillis)) {
+      return cached.variants !== undefined && !cached.variants.has(variant) ? undefined : variant;
+    }
+    cache?.delete(key);
+  }
+
   // Only a confirmed catalog mismatch can invalidate a persisted selection.
-  return yield* runOpenCodeSdk("provider.list", (signal) =>
+  const response = yield* runOpenCodeSdk("provider.list", (signal) =>
     client.provider.list(undefined, {
       signal: abortSignal ? AbortSignal.any([signal, abortSignal]) : signal,
     }),
   ).pipe(
-    Effect.map((response) => {
-      const catalogModel = response.data?.all.find((provider) => provider.id === model.providerID)
-        ?.models[model.modelID];
-      return catalogModel && !Object.hasOwn(catalogModel.variants ?? {}, variant)
-        ? undefined
-        : variant;
-    }),
     Effect.timeout("4 seconds"),
-    Effect.orElseSucceed(() => variant),
+    Effect.orElseSucceed(() => undefined),
   );
+  if (response?.data === undefined) return variant;
+
+  const catalogModel = response.data.all.find((provider) => provider.id === model.providerID)
+    ?.models[model.modelID];
+  const variants = catalogModel ? new Set(Object.keys(catalogModel.variants ?? {})) : undefined;
+  if (cache !== undefined) {
+    // Keep only this model's names; provider.list can return several megabytes.
+    cache.set(key, { variants, expiresAt: (yield* Clock.currentTimeMillis) + 60_000 });
+  }
+  return variants !== undefined && !variants.has(variant) ? undefined : variant;
 });
 
 export interface OpenCodeSkill {
